@@ -7,17 +7,28 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def make_request(session, url):
-    """Make a single HTTP request using a session"""
-    try:
-        response = session.get(url, timeout=5)  # Reduced timeout to 5 seconds
-        return response.status_code == 204 or response.status_code == 200
-    except requests.exceptions.Timeout:
-        print(f"\nRequest timeout after 5 seconds")
-        return False
-    except Exception as e:
-        print(f"\nRequest failed: {e}")
-        return False
+def make_request(session, url, max_retries=3):
+    """Make a single HTTP request using a session with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            response = session.get(url, timeout=15)  # Increased timeout
+            if response.status_code in (204, 200):
+                return True
+            elif response.status_code == 500 and attempt < max_retries - 1:
+                # Server error, retry with backoff
+                time.sleep(0.05 * (attempt + 1))
+                continue
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            print(f"\nRequest timeout after {max_retries} attempts")
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            print(f"\nRequest failed after {max_retries} attempts: {e}")
+    return False
 
 
 def make_requests_sequential(base_url, num_requests, progress_callback=None):
@@ -31,7 +42,8 @@ def make_requests_sequential(base_url, num_requests, progress_callback=None):
         session.headers.update({'Connection': 'keep-alive'})
         
         for i in range(num_requests):
-            make_request(session, url)
+            success = make_request(session, url)
+            # Track failures but continue - retries are handled in make_request
             if progress_callback and (i + 1) % 1000 == 0:
                 progress_callback(i + 1, num_requests)
     
@@ -57,7 +69,8 @@ def make_requests_parallel(base_url, num_requests, num_clients, progress_callbac
             session.headers.update({'Connection': 'keep-alive'})
             
             for i in range(num_reqs):
-                make_request(session, url)
+                success = make_request(session, url)
+                # Track failures but continue - retries are handled in make_request
                 if progress_callback:
                     with lock:
                         completed_count[0] += 1
